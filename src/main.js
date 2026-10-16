@@ -662,7 +662,11 @@ function fit() {
 
 // ---------- updates ----------
 const UPDATE_EVERY = 6 * 3600 * 1000;
+const UPDATE_ON_OPEN = 3600 * 1000; // opening the widget checks again once the last check is this old
+let lastUpdateCheck = 0;
 async function checkUpdate() {
+  if (state.updating) return; // keep the bar (and its spinner) while installing
+  lastUpdateCheck = Date.now();
   const info = await invoke("check_update").catch(() => null); // offline or GitHub down: try again later
   state.update = info || null;
   renderUpdate();
@@ -729,4 +733,7 @@ function renderUpdate() {
   setInterval(() => refresh(), 3000);
   checkUpdate();
   setInterval(checkUpdate, UPDATE_EVERY);
+  window.__TAURI__.event.listen("widget-shown", () => {
+    if (Date.now() - lastUpdateCheck > UPDATE_ON_OPEN) checkUpdate();
+  });
 })();
