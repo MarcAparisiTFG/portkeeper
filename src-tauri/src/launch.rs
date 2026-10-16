@@ -27,9 +27,11 @@ pub struct Entry {
     pub key: String,
     pub title: String,
     pub path: String,
-    /// Real command line, needed to relaunch. Never sent to the UI.
-    pub command: String,
-    /// Command with secrets masked, for display.
+    /// The arguments to run again, as captured. Never sent to the UI.
+    pub argv: Vec<String>,
+    /// Masked command line for display. Not stored: rebuilt from `argv` on load, so the
+    /// file can never show one command and run another.
+    #[serde(skip)]
     pub display: String,
     /// The command carries a secret: kept in memory only, never written to disk.
     #[serde(default)]
@@ -82,10 +84,15 @@ fn base(path: &str) -> String {
 
 impl Tracker {
     pub fn load(file: PathBuf) -> Self {
-        let closed = std::fs::read(&file)
+        let mut closed = std::fs::read(&file)
             .ok()
             .and_then(|b| serde_json::from_slice::<Vec<Entry>>(&b).ok())
             .unwrap_or_default();
+        // Entries from before argv was stored have nothing safe to run: drop them.
+        closed.retain(|e| !e.argv.is_empty() && !e.cwd_abs.is_empty());
+        for e in &mut closed {
+            e.display = crate::ports::display_of(&e.argv);
+        }
         let mut t = Tracker {
             closed,
             file: Some(file),
@@ -130,7 +137,7 @@ impl Tracker {
                 key: l.key.clone(),
                 title: base(&path),
                 path,
-                command: l.command.clone(),
+                argv: l.argv.clone(),
                 display: l.display.clone(),
                 secret: l.secret,
                 items: Vec::new(),
@@ -229,7 +236,7 @@ impl Tracker {
         std::fs::create_dir_all(log_dir).map_err(|e| e.to_string())?;
         let log = log_dir.join(format!("{safe}.log"));
         spawn_detached(
-            &e.command,
+            &e.argv,
             &e.cwd_abs,
             self.envs.get(key).map(Vec::as_slice),
             &log,
@@ -238,14 +245,19 @@ impl Tracker {
     }
 }
 
-/// Run `command` through the user's shell in `cwd`, detached from Portkeeper, output to `log`.
-/// With a captured environment it is reused as is; otherwise a login shell rebuilds PATH.
+/// Run `argv` in `cwd`, detached from Portkeeper, output to `log`.
+///
+/// No shell ever parses the command. On Unix the user's own login shell is only used to
+/// rebuild PATH (nvm, pyenv…) and then `exec "$@"` runs the words as given, so `;`, `|`
+/// or `$(…)` inside a captured argument are just characters. With a captured environment
+/// it is reused as is. On Windows the executable is started directly, without cmd.exe.
 pub fn spawn_detached(
-    command: &str,
+    argv: &[String],
     cwd: &str,
     env: Option<&[(String, String)]>,
     log: &Path,
 ) -> Result<u32, String> {
+    let (exe, rest) = argv.split_first().ok_or("nothing to run")?;
     let out = std::fs::File::create(log).map_err(|e| e.to_string())?;
     let err = out.try_clone().map_err(|e| e.to_string())?;
     let env = env.filter(|e| !e.is_empty());
@@ -253,12 +265,14 @@ pub fn spawn_detached(
     #[cfg(unix)]
     let mut cmd = {
         use std::os::unix::process::CommandExt;
-        let shell = env
-            .and_then(|e| e.iter().find(|(k, _)| k == "SHELL").map(|(_, v)| v.clone()))
-            .or_else(|| std::env::var("SHELL").ok())
-            .unwrap_or_else(|| "/bin/zsh".into());
+        // Portkeeper's own shell, never one named by the process being relaunched.
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
         let mut c = Command::new(shell);
-        c.args([if env.is_some() { "-c" } else { "-ilc" }, command]);
+        c.arg(if env.is_some() { "-c" } else { "-ilc" })
+            .arg("exec \"$@\"")
+            .arg("portkeeper") // $0
+            .arg(exe)
+            .args(rest);
         c.process_group(0); // survives Portkeeper quitting
         c
     };
@@ -267,8 +281,9 @@ pub fn spawn_detached(
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        let mut c = Command::new("cmd");
-        c.args(["/C", command]);
+        // std refuses .bat/.cmd targets with arguments cmd.exe could misparse (CVE-2024-24576).
+        let mut c = Command::new(exe);
+        c.args(rest);
         c.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
         c
     };
@@ -311,10 +326,10 @@ mod tests {
             launch: Some(Launch {
                 key: key.into(),
                 display: "npm run dev".into(),
-                command: if secret {
-                    "tool --token abc".into()
+                argv: if secret {
+                    vec!["tool".into(), "--token".into(), "abc".into()]
                 } else {
-                    "npm run dev".into()
+                    vec!["npm".into(), "run".into(), "dev".into()]
                 },
                 secret,
                 pid: 0,
@@ -322,6 +337,37 @@ mod tests {
             }),
             started_at: None,
         }
+    }
+
+    /// Relaunch without a captured environment goes through the login shell, but the
+    /// arguments are never parsed by it: shell syntax inside one is plain text.
+    #[cfg(unix)]
+    #[test]
+    fn relaunch_does_not_parse_arguments() {
+        let dir = std::env::temp_dir().join(format!("portkeeper-spawn-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("pwned");
+        let log = dir.join("out.log");
+        let argv: Vec<String> = [
+            "printf",
+            "%s",
+            &format!("x; touch {}; echo $(id)", marker.display()),
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        super::spawn_detached(&argv, dir.to_str().unwrap(), None, &log).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::fs::read_to_string(&log).map_or(true, |s| s.is_empty()) {
+            assert!(std::time::Instant::now() < deadline, "printf never ran");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let out = std::fs::read_to_string(&log).unwrap();
+        assert!(out.contains("x; touch"), "argument passed verbatim: {out}");
+        assert!(out.contains("$(id)"), "no command substitution: {out}");
+        assert!(!marker.exists(), "an argument must never be executed");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -348,8 +394,13 @@ mod tests {
 
         // Only the entry without a secret reaches the disk.
         let saved = std::fs::read_to_string(&file).unwrap();
-        assert!(saved.contains("npm run dev"));
+        assert!(saved.contains("\"npm\"") && saved.contains("\"dev\""));
         assert!(!saved.contains("--token"));
+        // The display is not stored: a fresh load rebuilds it from the argv that will run.
+        assert!(!saved.contains("display"));
+        let reloaded = Tracker::load(file.clone()).closed();
+        assert_eq!(reloaded.len(), 1);
+        assert_eq!(reloaded[0].display, "npm run dev");
 
         t.update(&[port(5173, "a", false)]);
         assert_eq!(

