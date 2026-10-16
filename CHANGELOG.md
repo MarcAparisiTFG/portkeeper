@@ -9,6 +9,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+### Changed
+- A new version is only announced (in the app, on the website and on GitHub) once it is ready for every platform.
+
 ## [0.5.0] - 2026-10-16
 
 ### Added
