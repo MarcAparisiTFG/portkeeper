@@ -9,6 +9,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+### Changed
+- Opening the widget checks for updates again when the last check was more than an hour ago, instead of waiting up to 6 hours.
+
 ## [0.5.0] - 2026-10-16
 
 ### Added

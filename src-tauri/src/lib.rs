@@ -12,7 +12,7 @@ use std::sync::Mutex;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{
-    AppHandle, LogicalPosition, LogicalSize, Manager, Monitor, PhysicalPosition, Rect,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Monitor, PhysicalPosition, Rect,
     WebviewWindow,
 };
 use tauri_plugin_autostart::ManagerExt as _;
@@ -778,6 +778,8 @@ fn show(app: &AppHandle, icon: Option<Rect>) {
         return;
     };
     place_near(app, &win, icon);
+    // Lets the widget re-check for updates when it has been a while (see main.js).
+    let _ = app.emit_to("main", "widget-shown", ());
     if native_show(app, &win) {
         return;
     }
