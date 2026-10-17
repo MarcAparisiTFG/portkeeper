@@ -1189,4 +1189,69 @@ mod tests {
         assert_eq!(again_launch.map(|l| l.key), Some(launch.key));
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// The title rewrite is not an npm thing: any program that renames itself leaves the
+    /// same argv shape behind. Ruby's `Process.setproctitle` is the probe here; the captured
+    /// launcher must be the title's words with nothing from the environment appended.
+    #[test]
+    #[ignore = "needs ruby on PATH and spawns a real server"]
+    fn rewritten_title_is_captured_for_any_program() {
+        use std::net::TcpListener;
+        use std::time::{Duration, Instant};
+
+        let wait_for = |port: u16, present: bool| {
+            let deadline = Instant::now() + Duration::from_secs(20);
+            loop {
+                let hit = super::list().unwrap().into_iter().find(|p| p.port == port);
+                if hit.is_some() == present {
+                    return hit;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "port {port} present={present} timed out"
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        };
+
+        let port = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let dir = std::path::PathBuf::from(std::env::var("HOME").unwrap())
+            .join(format!(".portkeeper-title-test-{port}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let title = format!("renamed-server serve --port {port}");
+        let script = format!(
+            "Process.setproctitle({title:?}); require 'socket'; \
+             TCPServer.new('127.0.0.1', {port}); sleep"
+        );
+        let mut shell = std::process::Command::new("/bin/sh")
+            .args(["-c", &format!("ruby -e {} & wait", shell_quote(&script))])
+            .current_dir(&dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sh available");
+
+        let found = wait_for(port, true).unwrap();
+        let launch = found.launch.clone();
+        let _ = super::kill(found.pid, true);
+        let _ = shell.wait();
+        wait_for(port, false);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let launch = launch.expect("launch info");
+        assert_eq!(
+            launch.argv,
+            v(&["renamed-server", "serve", "--port", &port.to_string()]),
+            "{}",
+            launch.display
+        );
+    }
+
+    fn shell_quote(s: &str) -> String {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
 }
