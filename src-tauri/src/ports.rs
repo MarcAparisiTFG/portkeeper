@@ -1097,4 +1097,96 @@ mod tests {
         assert_eq!(again.launch.map(|l| l.key), Some(launch.key));
         wait_for(port, false);
     }
+
+    /// A real `npm start`: npm rewrites its title, and on macOS the environment leaks into
+    /// the argv slots after it. The captured launcher must be exactly `npm start`, and
+    /// relaunching those words must bring the port back.
+    #[test]
+    #[ignore = "needs npm on PATH and spawns a real server"]
+    fn captures_and_relaunches_a_real_npm_start() {
+        use std::net::TcpListener;
+        use std::time::{Duration, Instant};
+
+        let wait_for = |port: u16, present: bool| {
+            let deadline = Instant::now() + Duration::from_secs(20);
+            loop {
+                let hit = super::list().unwrap().into_iter().find(|p| p.port == port);
+                if hit.is_some() == present {
+                    return hit;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "port {port} present={present} timed out"
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        };
+
+        let port = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        // Launch info is only captured for projects under the home folder.
+        let dir = std::path::PathBuf::from(std::env::var("HOME").unwrap())
+            .join(format!(".portkeeper-npm-test-{port}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("package.json"),
+            r#"{"name":"pk-test","private":true,"scripts":{"start":"node server.js"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("server.js"),
+            format!("require('net').createServer().listen({port}, '127.0.0.1');"),
+        )
+        .unwrap();
+
+        // The shell is a boundary, so the launcher found must be npm itself.
+        let mut shell = std::process::Command::new("/bin/sh")
+            .args(["-c", "npm start & wait"])
+            .current_dir(&dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sh available");
+
+        let found = wait_for(port, true).unwrap();
+        let cleanup = |pid: u32| {
+            let _ = super::kill(pid, true);
+        };
+        let launch = match std::panic::catch_unwind(|| {
+            let launch = found.launch.clone().expect("launch info");
+            assert_eq!(launch.argv, v(&["npm", "start"]), "{}", launch.display);
+            assert_eq!(launch.display, "npm start");
+            assert_eq!(
+                std::fs::canonicalize(&launch.cwd_abs).unwrap(),
+                std::fs::canonicalize(&dir).unwrap()
+            );
+            launch
+        }) {
+            Ok(l) => l,
+            Err(e) => {
+                cleanup(found.pid);
+                let _ = std::fs::remove_dir_all(&dir);
+                std::panic::resume_unwind(e);
+            }
+        };
+        let env = super::environ(launch.pid);
+
+        super::kill(launch.pid, false).unwrap();
+        let _ = shell.wait();
+        wait_for(port, false);
+
+        let log = dir.join("relaunch.log");
+        crate::launch::spawn_detached(&launch.argv, &launch.cwd_abs, Some(&env), &log).unwrap();
+        let again = wait_for(port, true).unwrap();
+        let again_launch = again.launch.clone();
+        cleanup(again.pid);
+        wait_for(port, false);
+        let out = std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(!out.contains("not found"), "relaunch log: {out}");
+        assert_eq!(again_launch.map(|l| l.key), Some(launch.key));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
