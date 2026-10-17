@@ -575,6 +575,7 @@ function renderSettings() {
     toggleRow(t("launchAtLogin"), null, s.launch_at_login, () => setSetting("launch_at_login", !s.launch_at_login)),
     toggleRow(t("openOnStart"), t("openOnStartHint"), s.show_on_start, () => setSetting("show_on_start", !s.show_on_start)),
     toggleRow(t("showAll"), t("showAllHint"), s.show_all, () => setSetting("show_all", !s.show_all)),
+    toggleRow(t("closeOnBlur"), t("closeOnBlurHint"), s.close_on_blur, () => setSetting("close_on_blur", !s.close_on_blur)),
     toggleRow(t("checkUpdates"), t("checkUpdatesHint"), s.check_updates, async () => {
       await setSetting("check_updates", !s.check_updates);
       checkUpdate();
@@ -604,6 +605,7 @@ function renderSettings() {
 }
 
 function render() {
+  $("#min").style.display = state.settings.close_on_blur ? "none" : "";
   const settingsOpen = state.view === "settings";
   $("#settings").classList.toggle("hidden", !settingsOpen);
   $("#list").classList.toggle("hidden", settingsOpen);
