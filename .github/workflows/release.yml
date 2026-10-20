@@ -33,8 +33,49 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: sh .github/release-notes.sh "$TAG"
 
-  build:
+  # One draft release for all four builds to upload into. A draft is invisible to the app,
+  # the website and releases/latest, so nobody is offered a half-uploaded release.
+  draft:
     needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      id: ${{ steps.create.outputs.id }}
+      notes: ${{ steps.notes.outputs.body }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The CHANGELOG.md section for this version becomes the release notes, which the
+      # app shows when it offers the update.
+      - name: Release notes
+        id: notes
+        run: |
+          {
+            sh .github/release-notes.sh "$TAG"
+            echo
+            echo '---'
+            echo 'Download the installer for your platform below. The builds have no Apple or Microsoft developer certificate yet, so your system warns once: macOS → System Settings → Privacy & Security → Open Anyway; Windows → More info → Run anyway. Details in the README.'
+          } > "$RUNNER_TEMP/notes.md"
+          { echo 'body<<PORTKEEPER_NOTES_EOF'; cat "$RUNNER_TEMP/notes.md"; echo 'PORTKEEPER_NOTES_EOF'; } >> "$GITHUB_OUTPUT"
+      - name: Create draft release
+        id: create
+        run: |
+          # Re-running the workflow reuses its draft; a published release is never touched.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft > "$RUNNER_TEMP/draft" 2>/dev/null; then
+            [ "$(cat "$RUNNER_TEMP/draft")" = true ] || { echo "::error::$TAG is already published"; exit 1; }
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+              --title "Portkeeper $TAG" --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+          echo "id=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json databaseId --jq .databaseId)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: draft
     # Holds the signing key: add yourself as required reviewer in Settings -> Environments -> release.
     environment: release
     permissions:
@@ -72,22 +113,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - run: pnpm install --frozen-lockfile
-      # The CHANGELOG.md section for this version becomes the release notes, which the
-      # app shows when it offers the update.
-      - name: Release notes
-        id: notes
-        shell: bash
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          {
-            echo 'body<<PORTKEEPER_NOTES_EOF'
-            sh .github/release-notes.sh "$TAG"
-            echo
-            echo '---'
-            echo 'Download the installer for your platform below. The builds have no Apple or Microsoft developer certificate yet, so your system warns once: macOS → System Settings → Privacy & Security → Open Anyway; Windows → More info → Run anyway. Details in the README.'
-            echo 'PORTKEEPER_NOTES_EOF'
-          } >> "$GITHUB_OUTPUT"
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -99,19 +124,19 @@ jobs:
           # "Open Anyway". Replace with a Developer ID identity once there is one.
           APPLE_SIGNING_IDENTITY: "-"
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "Portkeeper ${{ github.ref_name }}"
-          releaseBody: ${{ steps.notes.outputs.body }}
-          releaseDraft: false
-          prerelease: false
+          # Upload into the draft; publish below only once every build is in.
+          releaseId: ${{ needs.draft.outputs.id }}
+          # Also the "What's new" text inside latest.json.
+          releaseBody: ${{ needs.draft.outputs.notes }}
           args: ${{ matrix.args }}
           # latest.json, read by the in-app updater; Windows updates through the .exe installer.
           uploadUpdaterJson: true
           updaterJsonPreferNsis: true
 
   # Copies of the main installers with version-free names, so
-  # releases/latest/download/<name> always points at the newest build (README, website).
-  stable-names:
+  # releases/latest/download/<name> always points at the newest build (README, website),
+  # then publish. Only runs if all four builds succeeded.
+  publish:
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -130,3 +155,5 @@ jobs:
           mv *_x64-setup.exe Portkeeper-Windows-x64-setup.exe
           mv *_amd64.AppImage Portkeeper-Linux-x86_64.AppImage
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber Portkeeper-*
+      - name: Publish
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
