@@ -1,0 +1,37 @@
+name: Website
+
+# Every merge to main that changes the site or the app UI (the live demo) redeploys
+# portkeeper.pages.dev, so the site and the install scripts can never fall behind.
+on:
+  push:
+    branches: [main]
+    paths: ["site/**", "src/**", ".github/workflows/site.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Holds the Cloudflare token (Pages: Edit only). No signing key, no repository write access.
+    environment: site
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      # Same as `pnpm run site`: the app UI becomes the live demo on the page.
+      - run: rm -rf site/app && cp -R src site/app
+      - name: Deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@4.151.0 pages deploy site --project-name portkeeper --branch main
