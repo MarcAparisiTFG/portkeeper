@@ -35,6 +35,7 @@ struct SettingsDto {
     protected: Vec<String>,
     launch_at_login: bool,
     check_updates: bool,
+    close_on_blur: bool,
     version: String,
 }
 
@@ -276,6 +277,7 @@ fn get_settings(app: AppHandle) -> SettingsDto {
         protected: s.protected,
         launch_at_login: app.autolaunch().is_enabled().unwrap_or(false),
         check_updates: s.check_updates,
+        close_on_blur: s.close_on_blur,
         version: app.package_info().version.to_string(),
     }
 }
@@ -293,6 +295,7 @@ fn set_setting(app: AppHandle, name: String, value: bool) -> Result<(), String> 
         "show_on_start" => store.value.show_on_start = value,
         "show_all" => store.value.show_all = value,
         "check_updates" => store.value.check_updates = value,
+        "close_on_blur" => store.value.close_on_blur = value,
         _ => return Err(format!("unknown setting {name}")),
     }
     store.save();
@@ -488,6 +491,28 @@ tauri_nspanel::tauri_panel! {
     })
 }
 
+#[cfg(target_os = "macos")]
+#[allow(clippy::unused_unit)] // panel_event! requires the explicit `-> ()`
+mod panel_events {
+    tauri_nspanel::tauri_panel! {
+        panel_event!(WidgetPanelEvents {
+            window_did_resign_key(notification: &NSNotification) -> ()
+        })
+    }
+
+    /// Run `f` when the widget panel stops being the key window (a click went elsewhere).
+    pub fn on_resign_key(app: &tauri::AppHandle, f: impl Fn() + 'static) {
+        use tauri_nspanel::ManagerExt;
+        let Ok(panel) = app.get_webview_panel("main") else {
+            return;
+        };
+        let events = WidgetPanelEvents::new();
+        events.window_did_resign_key(move |_| f());
+        // The panel keeps the handler alive until it is replaced.
+        panel.set_event_handler(Some(events.as_ref()));
+    }
+}
+
 /// macOS: a non-activating NSPanel. It opens on the desktop you are on (also over
 /// full-screen apps) and stays on that desktop instead of following you around.
 #[cfg(target_os = "macos")]
@@ -504,6 +529,9 @@ fn make_panel(win: &WebviewWindow) -> tauri::Result<()> {
     );
     let _ = panel.add_style_mask(StyleMask::empty().nonactivating_panel().into());
     panel.set_hides_on_deactivate(false);
+    // Close on a click anywhere else, like the system's own menu bar extras.
+    let app = win.app_handle().clone();
+    panel_events::on_resign_key(win.app_handle(), move || auto_hide(&app));
     Ok(())
 }
 
@@ -565,7 +593,8 @@ fn native_show(app: &AppHandle, win: &WebviewWindow) -> bool {
     start.origin.y += if up { -6.0 } else { 6.0 };
     ns.setAlphaValue(0.0);
     ns.setFrame_display(start, false);
-    panel.show();
+    // Key, so that a click elsewhere resigns it and closes the widget.
+    panel.show_and_make_key();
     unsafe {
         NSAnimationContext::beginGrouping();
         NSAnimationContext::currentContext().setDuration(anim_secs(true));
@@ -787,17 +816,39 @@ fn show(app: &AppHandle, icon: Option<Rect>) {
     {
         use tauri_nspanel::ManagerExt;
         if let Ok(p) = app.get_webview_panel("main") {
-            p.show();
+            p.show_and_make_key();
             return;
         }
     }
     let _ = win.show();
 }
 
+/// When a click outside last closed the widget. A click on the tray icon is outside too,
+/// and its toggle arrives right after: that toggle must not reopen the widget.
+static AUTO_HIDDEN_AT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+/// The widget lost focus: close it, like a menu bar extra, if the setting is on.
+fn auto_hide(app: &AppHandle) {
+    let on = app
+        .state::<SettingsState>()
+        .lock()
+        .unwrap()
+        .value
+        .close_on_blur;
+    if on && is_visible(app) {
+        *AUTO_HIDDEN_AT.lock().unwrap() = Some(std::time::Instant::now());
+        hide(app);
+    }
+}
+
 fn toggle(app: &AppHandle, icon: Option<Rect>) {
+    let just_closed = AUTO_HIDDEN_AT
+        .lock()
+        .unwrap()
+        .is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(300));
     if is_visible(app) {
         hide(app);
-    } else {
+    } else if !just_closed {
         show(app, icon);
     }
 }
@@ -836,6 +887,13 @@ pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
+    // macOS closes from the panel's resign-key event (make_panel).
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.on_window_event(|win, event| {
+        if let tauri::WindowEvent::Focused(false) = event {
+            auto_hide(win.app_handle());
+        }
+    });
     builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
