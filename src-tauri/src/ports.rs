@@ -476,9 +476,28 @@ pub fn detect_tech(argv: &[String], process: &str) -> Option<&'static str> {
         "mysqld" | "mariadbd" => "mysql",
         "cloudflared" => "cloudflare",
         "docker" | "com.docker.backend" => "docker",
-        _ => return None,
+        _ => return compiled_tech(first),
     };
     Some(id)
+}
+
+/// A binary built by `cargo run` / `cargo watch` (it lives under `target/<profile>/`) or by
+/// `go run` (a temporary `go-build…` folder). Only the development case: a release binary
+/// copied elsewhere looks like any other program.
+fn compiled_tech(exe: &str) -> Option<&'static str> {
+    let path = exe.replace('\\', "/");
+    let mut dirs: Vec<&str> = path.split('/').collect();
+    dirs.pop(); // the file itself
+    if dirs.iter().any(|d| d.starts_with("go-build")) {
+        return Some("go");
+    }
+    // target/debug, target/release, or target/<triple>/debug for cross builds.
+    let target = dirs.iter().position(|d| *d == "target")?;
+    let profile = dirs[target + 1..].iter().take(2);
+    profile
+        .into_iter()
+        .any(|d| matches!(*d, "debug" | "release"))
+        .then_some("rust")
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -976,6 +995,29 @@ mod tests {
         assert_eq!(friendly_label(&ollama, "ollama"), "ollama");
         assert_eq!(detect_tech(&ollama, "ollama"), Some("ollama"));
         assert_eq!(friendly_label(&[], "Spotify"), "Spotify");
+    }
+
+    #[test]
+    fn rust_and_go_dev_builds() {
+        use super::detect_tech;
+        // cargo run / cargo watch
+        let cargo = v(&["/Users/x/code/my-api/target/debug/my-api", "--port", "8080"]);
+        assert_eq!(detect_tech(&cargo, "my-api"), Some("rust"));
+        let release = v(&["target/release/server"]);
+        assert_eq!(detect_tech(&release, "server"), Some("rust"));
+        let cross = v(&["/home/x/api/target/aarch64-unknown-linux-gnu/debug/api"]);
+        assert_eq!(detect_tech(&cross, "api"), Some("rust"));
+        let win = v(&["C:\\Users\\x\\api\\target\\debug\\api.exe"]);
+        assert_eq!(detect_tech(&win, "api.exe"), Some("rust"));
+        // go run
+        let go = v(&["/var/folders/ab/T/go-build1234567/b001/exe/main"]);
+        assert_eq!(detect_tech(&go, "main"), Some("go"));
+        let go_linux = v(&["/tmp/go-build998877/b001/exe/server", "-addr", ":8080"]);
+        assert_eq!(detect_tech(&go_linux, "server"), Some("go"));
+        // Anything else stays unknown: a folder called "target" alone is not enough.
+        assert_eq!(detect_tech(&v(&["/usr/local/bin/my-api"]), "my-api"), None);
+        assert_eq!(detect_tech(&v(&["/srv/target/bin/api"]), "api"), None);
+        assert_eq!(detect_tech(&v(&["/opt/debug/target"]), "target"), None);
     }
 
     #[test]
