@@ -269,9 +269,29 @@ fn argv_of(p: &sysinfo::Process) -> Vec<String> {
         .map(|a| a.to_string_lossy().trim_end_matches('\0').to_string())
         .filter(|a| !a.is_empty())
         .collect();
-    // A process that rewrote its title (npm does) reports one string; split it into words.
-    match argv.as_slice() {
-        [one] if one.contains(char::is_whitespace) => split_words(one),
+    words_of(argv)
+}
+
+/// A process that rewrote its title (npm does) reports one string; split it into words.
+/// On macOS the title overwrites the argument area but argc stays the same, so the
+/// slots after it are read from the environment that follows ("npm start",
+/// "OSLogRateLimit=64", "MallocNanoZone=0"). Those `KEY=value` strings are dropped.
+fn words_of(argv: Vec<String>) -> Vec<String> {
+    let is_env = |a: &String| {
+        a.split_once('=').is_some_and(|(k, _)| {
+            k.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
+    };
+    match argv.split_first() {
+        // A real executable path with a space ("/Applications/My App/…") is not a title.
+        Some((title, rest))
+            if title.contains(char::is_whitespace)
+                && !std::path::Path::new(title).is_file()
+                && rest.iter().all(is_env) =>
+        {
+            split_words(title)
+        }
         _ => argv,
     }
 }
@@ -839,6 +859,26 @@ mod tests {
         assert_eq!(split_words("  "), Vec::<String>::new());
     }
 
+    /// macOS: npm's rewritten title is followed by environment strings in the argv slots.
+    #[test]
+    fn rewritten_title_drops_trailing_environment() {
+        use super::words_of;
+        assert_eq!(
+            words_of(v(&["npm start", "OSLogRateLimit=64", "MallocNanoZone=0"])),
+            v(&["npm", "start"])
+        );
+        assert_eq!(words_of(v(&["npm run dev"])), v(&["npm", "run", "dev"]));
+        // Real arguments after a spaced first word are left alone.
+        assert_eq!(
+            words_of(v(&["my tool", "--port", "9000"])),
+            v(&["my tool", "--port", "9000"])
+        );
+        assert_eq!(
+            words_of(v(&["node", "server.js", "PORT=9000"])),
+            v(&["node", "server.js", "PORT=9000"])
+        );
+    }
+
     /// What the Closed tab shows is built from the exact argv that would run.
     #[test]
     fn display_matches_what_runs() {
@@ -1056,5 +1096,162 @@ mod tests {
         cleanup(again.pid);
         assert_eq!(again.launch.map(|l| l.key), Some(launch.key));
         wait_for(port, false);
+    }
+
+    /// A real `npm start`: npm rewrites its title, and on macOS the environment leaks into
+    /// the argv slots after it. The captured launcher must be exactly `npm start`, and
+    /// relaunching those words must bring the port back.
+    #[test]
+    #[ignore = "needs npm on PATH and spawns a real server"]
+    fn captures_and_relaunches_a_real_npm_start() {
+        use std::net::TcpListener;
+        use std::time::{Duration, Instant};
+
+        let wait_for = |port: u16, present: bool| {
+            let deadline = Instant::now() + Duration::from_secs(20);
+            loop {
+                let hit = super::list().unwrap().into_iter().find(|p| p.port == port);
+                if hit.is_some() == present {
+                    return hit;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "port {port} present={present} timed out"
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        };
+
+        let port = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        // Launch info is only captured for projects under the home folder.
+        let dir = std::path::PathBuf::from(std::env::var("HOME").unwrap())
+            .join(format!(".portkeeper-npm-test-{port}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("package.json"),
+            r#"{"name":"pk-test","private":true,"scripts":{"start":"node server.js"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("server.js"),
+            format!("require('net').createServer().listen({port}, '127.0.0.1');"),
+        )
+        .unwrap();
+
+        // The shell is a boundary, so the launcher found must be npm itself.
+        let mut shell = std::process::Command::new("/bin/sh")
+            .args(["-c", "npm start & wait"])
+            .current_dir(&dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sh available");
+
+        let found = wait_for(port, true).unwrap();
+        let cleanup = |pid: u32| {
+            let _ = super::kill(pid, true);
+        };
+        let launch = match std::panic::catch_unwind(|| {
+            let launch = found.launch.clone().expect("launch info");
+            assert_eq!(launch.argv, v(&["npm", "start"]), "{}", launch.display);
+            assert_eq!(launch.display, "npm start");
+            assert_eq!(
+                std::fs::canonicalize(&launch.cwd_abs).unwrap(),
+                std::fs::canonicalize(&dir).unwrap()
+            );
+            launch
+        }) {
+            Ok(l) => l,
+            Err(e) => {
+                cleanup(found.pid);
+                let _ = std::fs::remove_dir_all(&dir);
+                std::panic::resume_unwind(e);
+            }
+        };
+        let env = super::environ(launch.pid);
+
+        super::kill(launch.pid, false).unwrap();
+        let _ = shell.wait();
+        wait_for(port, false);
+
+        let log = dir.join("relaunch.log");
+        crate::launch::spawn_detached(&launch.argv, &launch.cwd_abs, Some(&env), &log).unwrap();
+        let again = wait_for(port, true).unwrap();
+        let again_launch = again.launch.clone();
+        cleanup(again.pid);
+        wait_for(port, false);
+        let out = std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(!out.contains("not found"), "relaunch log: {out}");
+        assert_eq!(again_launch.map(|l| l.key), Some(launch.key));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The title rewrite is not an npm thing: any program that renames itself leaves the
+    /// same argv shape behind. Ruby's `Process.setproctitle` is the probe here; the captured
+    /// launcher must be the title's words with nothing from the environment appended.
+    #[test]
+    #[ignore = "needs ruby on PATH and spawns a real server"]
+    fn rewritten_title_is_captured_for_any_program() {
+        use std::net::TcpListener;
+        use std::time::{Duration, Instant};
+
+        let wait_for = |port: u16, present: bool| {
+            let deadline = Instant::now() + Duration::from_secs(20);
+            loop {
+                let hit = super::list().unwrap().into_iter().find(|p| p.port == port);
+                if hit.is_some() == present {
+                    return hit;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "port {port} present={present} timed out"
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        };
+
+        let port = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let dir = std::path::PathBuf::from(std::env::var("HOME").unwrap())
+            .join(format!(".portkeeper-title-test-{port}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let title = format!("renamed-server serve --port {port}");
+        let script = format!(
+            "Process.setproctitle({title:?}); require 'socket'; \
+             TCPServer.new('127.0.0.1', {port}); sleep"
+        );
+        let mut shell = std::process::Command::new("/bin/sh")
+            .args(["-c", &format!("ruby -e {} & wait", shell_quote(&script))])
+            .current_dir(&dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sh available");
+
+        let found = wait_for(port, true).unwrap();
+        let launch = found.launch.clone();
+        let _ = super::kill(found.pid, true);
+        let _ = shell.wait();
+        wait_for(port, false);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let launch = launch.expect("launch info");
+        assert_eq!(
+            launch.argv,
+            v(&["renamed-server", "serve", "--port", &port.to_string()]),
+            "{}",
+            launch.display
+        );
+    }
+
+    fn shell_quote(s: &str) -> String {
+        format!("'{}'", s.replace('\'', "'\\''"))
     }
 }
