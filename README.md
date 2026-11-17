@@ -16,7 +16,8 @@
   <a href="https://github.com/MarcAparisiTFG/portkeeper/releases/latest/download/Portkeeper-macOS-Intel.dmg"><img src="docs/download-macos-intel.svg" height="60" alt="Download for macOS, Intel" /></a>
   <br />
   <a href="https://github.com/MarcAparisiTFG/portkeeper/releases/latest/download/Portkeeper-Windows-x64-setup.exe"><img src="docs/download-windows.svg" height="60" alt="Download for Windows" /></a>
-  <a href="https://github.com/MarcAparisiTFG/portkeeper/releases/latest/download/Portkeeper-Linux-x86_64.AppImage"><img src="docs/download-linux.svg" height="60" alt="Download for Linux" /></a>
+  <a href="https://github.com/MarcAparisiTFG/portkeeper/releases/latest/download/Portkeeper-Linux-x86_64.AppImage"><img src="docs/download-linux.svg" height="60" alt="Download for Linux, x86_64" /></a>
+  <a href="https://github.com/MarcAparisiTFG/portkeeper/releases/latest/download/Portkeeper-Linux-aarch64.AppImage"><img src="docs/download-linux-arm.svg" height="60" alt="Download for Linux, ARM64" /></a>
 </p>
 
 > **Fastest install: one command.** It downloads the latest release from GitHub, installs it and opens it. No "unidentified developer" dialog (the builds aren't signed with an Apple or Microsoft certificate yet, see [Install](#install)).
@@ -88,7 +89,8 @@ Download the file for your system. These links always point to the latest versio
 | macOS, Apple Silicon (M1 and later) | [Portkeeper-macOS-AppleSilicon.dmg](https://github.com/MarcAparisiTFG/portkeeper/releases/latest/download/Portkeeper-macOS-AppleSilicon.dmg) |
 | macOS, Intel | [Portkeeper-macOS-Intel.dmg](https://github.com/MarcAparisiTFG/portkeeper/releases/latest/download/Portkeeper-macOS-Intel.dmg) |
 | Windows 10 / 11 | [Portkeeper-Windows-x64-setup.exe](https://github.com/MarcAparisiTFG/portkeeper/releases/latest/download/Portkeeper-Windows-x64-setup.exe) |
-| Linux | [Portkeeper-Linux-x86_64.AppImage](https://github.com/MarcAparisiTFG/portkeeper/releases/latest/download/Portkeeper-Linux-x86_64.AppImage) |
+| Linux, x86_64 | [Portkeeper-Linux-x86_64.AppImage](https://github.com/MarcAparisiTFG/portkeeper/releases/latest/download/Portkeeper-Linux-x86_64.AppImage) |
+| Linux, ARM64 (Raspberry Pi 5, ARM laptops and VMs) | [Portkeeper-Linux-aarch64.AppImage](https://github.com/MarcAparisiTFG/portkeeper/releases/latest/download/Portkeeper-Linux-aarch64.AppImage) |
 
 The `.msi`, `.deb` and `.rpm` packages are on the [releases page](https://github.com/MarcAparisiTFG/portkeeper/releases/latest).
 

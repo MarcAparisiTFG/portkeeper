@@ -9,6 +9,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+### Added
+- **Linux on ARM64** (Raspberry Pi 5, Snapdragon laptops, Linux VMs on Apple Silicon): a native AppImage, also through the one-command install.
+
 ### Changed
 - Opening the widget checks for updates again when the last check was more than an hour ago, instead of waiting up to 6 hours.
 - A new version is only announced (in the app, on the website and on GitHub) once it is ready for every platform.
