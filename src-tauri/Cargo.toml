@@ -1,6 +1,6 @@
 [package]
 name = "portkeeper"
-version = "0.5.0"
+version = "0.6.0"
 description = "Open ports and Docker containers at a glance, from your tray"
 authors = ["Marc Aparisi Rull"]
 license = "MIT"
