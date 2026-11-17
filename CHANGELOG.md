@@ -11,9 +11,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Added
 - **Close on click outside** in Settings: the widget hides when you click anywhere else, like a menu bar menu. Opening a port, a container's logs or a link keeps it open. Off by default.
+- **Project folders** in Settings: add folders outside your home folder (`/srv`, `/var/www`, an external drive…) and the servers running there show up as projects, grouped by folder.
 
 ### Changed
 - Servers started with `cargo run` or `go run` get the Rust or Go icon instead of a plain tile.
+- A server started from your home folder itself now counts as a project too.
 - Opening the widget checks for updates again when the last check was more than an hour ago, instead of waiting up to 6 hours.
 - A new version is only announced (in the app, on the website and on GitHub) once it is ready for every platform.
 

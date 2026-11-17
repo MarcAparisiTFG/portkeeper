@@ -106,7 +106,6 @@ async function refresh(force = false) {
 
 // ---------- grouping ----------
 const base = (path) => path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
-const inProject = (cwd) => !!cwd && cwd.startsWith("~/") && !cwd.startsWith("~/Library/Containers/");
 
 // A group = one project folder (or one lone process / container) with its port items.
 function groups() {
@@ -129,7 +128,7 @@ function groups() {
 
   for (const p of state.ports) {
     if (dockerPorts.has(p.port)) continue;
-    const project = inProject(p.cwd);
+    const project = p.project; // under ~ or a project folder from Settings (ports.rs)
     if (!state.settings.show_all && !p.dev) continue;
     const g = add(project ? `dir:${p.cwd}` : `pid:${p.pid}`, { title: project ? base(p.cwd) : p.label, path: project ? p.cwd : "" });
     g.items.push({ key: `p:${p.pid}:${p.port}`, port: p.port, label: p.label, tech: p.tech, pid: p.pid, agent: p.agent, cmd: p.launch?.display || p.cmd, started: p.started_at });
@@ -581,6 +580,7 @@ function renderSettings() {
       checkUpdate();
     }),
   );
+  box.appendChild(projectFolders(s));
   box.appendChild(el("div", "sec", t("lockedProjects")));
   if (!s.protected.length) {
     box.appendChild(el("p", "hint", t("lockedHint")));
@@ -604,6 +604,57 @@ function renderSettings() {
   box.appendChild(foot);
 }
 
+// ---------- project folders ----------
+let folderDraft = "";
+async function addFolder(path) {
+  if (!path.trim()) return;
+  try {
+    state.settings.project_folders = await invoke("add_project_folder", { path });
+    folderDraft = "";
+    document.activeElement?.blur();
+  } catch (e) { toast(String(e), 4000); }
+  refresh(true);
+}
+async function removeFolder(path) {
+  try {
+    state.settings.project_folders = await invoke("remove_project_folder", { path });
+  } catch (e) { toast(String(e), 4000); }
+  refresh(true);
+}
+/** Folders whose processes are projects: the home folder (always) plus the user's own. */
+function projectFolders(s) {
+  const box = el("div");
+  box.appendChild(el("div", "sec", t("projectFolders")));
+  const list = el("div", "locks folders");
+  const row = (path, removable) => {
+    const lk = el("div", "lk");
+    lk.appendChild(el("i", "ico folder"));
+    const name = el("span", "", removable ? path : `~ (${t("homeFolder")})`);
+    name.title = path;
+    lk.appendChild(name);
+    if (removable) lk.appendChild(btn(t("remove").toLowerCase(), t("remove"), () => removeFolder(path)));
+    list.appendChild(lk);
+  };
+  row("~", false);
+  for (const f of s.project_folders || []) row(f, true);
+  box.appendChild(list);
+  const add = el("form", "folder-add");
+  const input = el("input");
+  input.id = "folder-input";
+  input.type = "text";
+  input.spellcheck = false;
+  input.autocomplete = "off";
+  input.placeholder = t("folderPlaceholder");
+  input.value = folderDraft;
+  input.addEventListener("input", () => { folderDraft = input.value; });
+  add.appendChild(input);
+  add.appendChild(el("button", "", t("add")));
+  add.addEventListener("submit", (e) => { e.preventDefault(); addFolder(input.value); });
+  box.appendChild(add);
+  box.appendChild(el("p", "hint", t("projectFoldersHint")));
+  return box;
+}
+
 function render() {
   $("#min").style.display = state.settings.close_on_blur ? "none" : "";
   const settingsOpen = state.view === "settings";
@@ -612,7 +663,8 @@ function render() {
   $("#settings-title").classList.toggle("hidden", !settingsOpen);
   for (const t of document.querySelectorAll(".tab")) t.classList.toggle("hidden", settingsOpen);
   $("#gear").classList.toggle("on", settingsOpen);
-  if (settingsOpen) renderSettings();
+  // Not while a folder is being typed: rebuilding the panel would drop the caret.
+  if (settingsOpen && document.activeElement?.id !== "folder-input") renderSettings();
 
   const gs = groups();
   const closed = closedRows();

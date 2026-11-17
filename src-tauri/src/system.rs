@@ -108,13 +108,43 @@ pub fn open_in_terminal(command: &str) -> Result<(), String> {
     }
 }
 
+/// The user's home folder, or "" if unknown.
+pub fn home() -> String {
+    std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).unwrap_or_default()
+}
+
 /// Replace the home directory prefix with `~` for display.
 pub fn tilde(path: &str) -> String {
-    let home =
-        std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).unwrap_or_default();
-    if !home.is_empty() && path.starts_with(&home) {
-        format!("~{}", &path[home.len()..])
-    } else {
-        path.to_string()
+    tilde_with(path, &home())
+}
+
+fn tilde_with(path: &str, home: &str) -> String {
+    let home = home.trim_end_matches(['/', '\\']);
+    // Only the home folder itself: "/Users/marc2" is not under "/Users/marc".
+    match path.strip_prefix(home) {
+        Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with(['/', '\\'])) => {
+            format!("~{rest}")
+        }
+        _ => path.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn tilde_only_shortens_the_home_folder() {
+        use super::tilde_with;
+        assert_eq!(
+            tilde_with("/Users/marc/code/app", "/Users/marc"),
+            "~/code/app"
+        );
+        assert_eq!(tilde_with("/Users/marc", "/Users/marc"), "~");
+        assert_eq!(
+            tilde_with("/Users/marc2/app", "/Users/marc"),
+            "/Users/marc2/app"
+        );
+        assert_eq!(tilde_with("/srv/app", "/Users/marc"), "/srv/app");
+        assert_eq!(tilde_with("/srv/app", ""), "/srv/app");
+        assert_eq!(tilde_with("C:\\Users\\m\\app", "C:\\Users\\m"), "~\\app");
     }
 }
