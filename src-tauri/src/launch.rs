@@ -329,6 +329,7 @@ mod tests {
             cmd: "node".into(),
             label: "vite".into(),
             tech: Some("vite"),
+            project: true,
             dev: true,
             launch: Some(Launch {
                 key: key.into(),
