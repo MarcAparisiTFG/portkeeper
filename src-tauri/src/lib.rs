@@ -184,6 +184,7 @@ async fn docker_action(app: AppHandle, id: String, action: String) -> Result<(),
 
 #[tauri::command]
 async fn docker_logs(name: String) -> Result<(), String> {
+    note_opened_other_app();
     docker::open_logs(&name)
 }
 
@@ -192,6 +193,7 @@ fn open_url(url: String) -> Result<(), String> {
     if !is_allowed_url(&url) {
         return Err("only local http://localhost:<port> URLs can be opened".into());
     }
+    note_opened_other_app();
     tauri_plugin_opener::open_url(url, None::<&str>).map_err(|e| e.to_string())
 }
 
@@ -593,7 +595,8 @@ fn native_show(app: &AppHandle, win: &WebviewWindow) -> bool {
     start.origin.y += if up { -6.0 } else { 6.0 };
     ns.setAlphaValue(0.0);
     ns.setFrame_display(start, false);
-    // Key, so that a click elsewhere resigns it and closes the widget.
+    // Key, so that a click elsewhere resigns it and closes the widget ("Close on click
+    // outside"). A non-activating panel only gets windowDidResignKey once it has been key.
     panel.show_and_make_key();
     unsafe {
         NSAnimationContext::beginGrouping();
@@ -825,7 +828,29 @@ fn show(app: &AppHandle, icon: Option<Rect>) {
 /// and its toggle arrives right after: that toggle must not reopen the widget.
 static AUTO_HIDDEN_AT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 
-/// The widget lost focus: close it, like a menu bar extra, if the setting is on.
+/// When the widget itself last opened another app (browser, terminal). The focus loss
+/// that follows is not a click outside, so it must not close the widget: you can open
+/// several ports in a row without reopening it each time.
+static OPENED_OTHER_APP_AT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+/// How long after opening another app a focus loss is still blamed on it.
+const OPENED_OTHER_APP_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+
+fn note_opened_other_app() {
+    *OPENED_OTHER_APP_AT.lock().unwrap() = Some(std::time::Instant::now());
+}
+
+/// `at` happened less than `window` before `now`.
+fn within(
+    at: Option<std::time::Instant>,
+    now: std::time::Instant,
+    window: std::time::Duration,
+) -> bool {
+    at.is_some_and(|t| now.saturating_duration_since(t) < window)
+}
+
+/// The widget lost focus: close it, like a menu bar extra, if the setting is on and the
+/// focus did not go to something the widget just opened.
 fn auto_hide(app: &AppHandle) {
     let on = app
         .state::<SettingsState>()
@@ -833,6 +858,14 @@ fn auto_hide(app: &AppHandle) {
         .unwrap()
         .value
         .close_on_blur;
+    let now = std::time::Instant::now();
+    if within(
+        *OPENED_OTHER_APP_AT.lock().unwrap(),
+        now,
+        OPENED_OTHER_APP_GRACE,
+    ) {
+        return;
+    }
     if on && is_visible(app) {
         *AUTO_HIDDEN_AT.lock().unwrap() = Some(std::time::Instant::now());
         hide(app);
@@ -840,10 +873,11 @@ fn auto_hide(app: &AppHandle) {
 }
 
 fn toggle(app: &AppHandle, icon: Option<Rect>) {
-    let just_closed = AUTO_HIDDEN_AT
-        .lock()
-        .unwrap()
-        .is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(300));
+    let just_closed = within(
+        *AUTO_HIDDEN_AT.lock().unwrap(),
+        std::time::Instant::now(),
+        std::time::Duration::from_millis(300),
+    );
     if is_visible(app) {
         hide(app);
     } else if !just_closed {
@@ -1019,6 +1053,29 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn opening_another_app_is_not_a_click_outside() {
+        use std::time::{Duration, Instant};
+        let now = Instant::now();
+        let grace = super::OPENED_OTHER_APP_GRACE;
+        // Nothing opened: a focus loss is a click outside.
+        assert!(!super::within(None, now, grace));
+        // A port was just opened in the browser: the focus loss that follows is ignored.
+        assert!(super::within(Some(now), now, grace));
+        assert!(super::within(
+            Some(now),
+            now + Duration::from_millis(400),
+            grace
+        ));
+        // Long after: a real click outside closes the widget again.
+        assert!(!super::within(Some(now), now + grace, grace));
+        assert!(!super::within(
+            Some(now),
+            now + Duration::from_secs(10),
+            grace
+        ));
+    }
+
     #[test]
     fn migrates_old_portero_files_once() {
         let root = std::env::temp_dir().join(format!("pk-migrate-{}", std::process::id()));
