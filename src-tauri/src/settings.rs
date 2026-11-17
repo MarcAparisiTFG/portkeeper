@@ -19,6 +19,8 @@ pub struct Settings {
     pub lang: String,
     /// Look for new versions on GitHub (the only request that leaves the machine).
     pub check_updates: bool,
+    /// Close the widget when it loses focus, like a menu bar menu.
+    pub close_on_blur: bool,
 }
 
 impl Default for Settings {
@@ -30,6 +32,7 @@ impl Default for Settings {
             theme: "glass".into(),
             lang: String::new(),
             check_updates: true,
+            close_on_blur: false,
         }
     }
 }
