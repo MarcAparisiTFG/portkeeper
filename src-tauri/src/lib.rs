@@ -35,6 +35,7 @@ struct SettingsDto {
     protected: Vec<String>,
     launch_at_login: bool,
     check_updates: bool,
+    project_folders: Vec<String>,
     version: String,
 }
 
@@ -100,7 +101,14 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 async fn list_ports(app: AppHandle) -> Result<Vec<ports::PortInfo>, String> {
-    let list = ports::list()?;
+    let folders = app
+        .state::<SettingsState>()
+        .lock()
+        .unwrap()
+        .value
+        .project_folders
+        .clone();
+    let list = ports::list(&folders)?;
     *app.state::<ScannedPids>().0.lock().unwrap() = list.iter().map(|p| p.pid).collect();
     if let Some(t) = app.try_state::<Mutex<launch::Tracker>>() {
         t.lock().unwrap().update(&list);
@@ -276,6 +284,7 @@ fn get_settings(app: AppHandle) -> SettingsDto {
         protected: s.protected,
         launch_at_login: app.autolaunch().is_enabled().unwrap_or(false),
         check_updates: s.check_updates,
+        project_folders: s.project_folders,
         version: app.package_info().version.to_string(),
     }
 }
@@ -321,6 +330,35 @@ fn set_lang(app: AppHandle, value: String) -> Result<(), String> {
     store.value.lang = value;
     store.save();
     Ok(())
+}
+
+/// Add a folder whose processes count as projects. Returns the new list.
+#[tauri::command]
+fn add_project_folder(app: AppHandle, path: String) -> Result<Vec<String>, String> {
+    let folder = settings::normalize_project_folder(&path)?;
+    let state = app.state::<SettingsState>();
+    let mut store = state.lock().unwrap();
+    let list = &mut store.value.project_folders;
+    if folder == "~" || list.contains(&folder) {
+        return Ok(list.clone());
+    }
+    if list.len() >= settings::MAX_PROJECT_FOLDERS {
+        return Err("That is the most project folders Portkeeper keeps.".into());
+    }
+    list.push(folder);
+    let out = list.clone();
+    store.save();
+    Ok(out)
+}
+
+/// Remove a folder from the project folders. Returns the new list.
+#[tauri::command]
+fn remove_project_folder(app: AppHandle, path: String) -> Vec<String> {
+    let state = app.state::<SettingsState>();
+    let mut store = state.lock().unwrap();
+    store.value.project_folders.retain(|f| *f != path);
+    store.save();
+    store.value.project_folders.clone()
 }
 
 /// Lock / unlock a project (by its row key).
@@ -804,7 +842,7 @@ fn toggle(app: &AppHandle, icon: Option<Rect>) {
 
 /// `portkeeper --dump`: print the scan as JSON (for debugging platform differences).
 pub fn dump() {
-    let ports = ports::list();
+    let ports = ports::list(&[]);
     let docker = docker::list();
     println!(
         "{}",
@@ -853,6 +891,8 @@ pub fn run() {
             docker_logs,
             open_url,
             get_settings,
+            add_project_folder,
+            remove_project_folder,
             fit_window,
             hide_window,
             set_tray_count,

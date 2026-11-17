@@ -9,7 +9,11 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+### Added
+- **Project folders** in Settings: add folders outside your home folder (`/srv`, `/var/www`, an external drive…) and the servers running there show up as projects, grouped by folder.
+
 ### Changed
+- A server started from your home folder itself now counts as a project too.
 - Opening the widget checks for updates again when the last check was more than an hour ago, instead of waiting up to 6 hours.
 - A new version is only announced (in the app, on the website and on GitHub) once it is ready for every platform.
 

@@ -24,8 +24,11 @@ pub struct PortInfo {
     /// What is serving the port: a framework ("vite", "next"), a runtime ("node", "python")
     /// or a known service ("ollama", "postgres"). The UI maps it to a logo.
     pub tech: Option<&'static str>,
-    /// A dev server worth showing by default: runs from a project folder under the
-    /// home directory, or is a known local service (ollama, postgres…).
+    /// Runs from a project folder: under the home directory or one of the extra
+    /// project folders in Settings. The UI groups it by that folder.
+    pub project: bool,
+    /// A dev server worth showing by default: runs from a project folder, or is a known
+    /// local service (ollama, postgres…).
     pub dev: bool,
     /// How this project was started, so it can be started again once closed.
     pub launch: Option<Launch>,
@@ -681,7 +684,8 @@ fn process_table() -> sysinfo::System {
     )
 }
 
-pub fn list() -> Result<Vec<PortInfo>, String> {
+/// Every listening TCP port. `project_folders`: the extra folders from Settings.
+pub fn list(project_folders: &[String]) -> Result<Vec<PortInfo>, String> {
     // `listeners` only reports TCP sockets in LISTEN state, which is exactly what we want.
     let all = listeners::get_all().map_err(|e| e.to_string())?;
     let sys = process_table();
@@ -721,7 +725,7 @@ pub fn list() -> Result<Vec<PortInfo>, String> {
         let tech = detect_tech(&argv, &process);
         let in_project = cwd
             .as_deref()
-            .is_some_and(|c| c.starts_with("~/") && !c.starts_with("~/Library/Containers/"));
+            .is_some_and(|c| crate::settings::is_project_dir(c, project_folders));
         let dev = !system
             && process != "com.docker.backend"
             && (in_project || matches!(tech, Some("ollama" | "postgres" | "redis" | "mysql")));
@@ -742,6 +746,7 @@ pub fn list() -> Result<Vec<PortInfo>, String> {
             cmd,
             label,
             tech,
+            project: in_project,
             dev,
             launch,
             started_at,
@@ -1027,7 +1032,10 @@ mod tests {
         let wait_for = |port: u16, present: bool| {
             let deadline = Instant::now() + Duration::from_secs(10);
             loop {
-                let hit = super::list().unwrap().into_iter().find(|p| p.port == port);
+                let hit = super::list(&[])
+                    .unwrap()
+                    .into_iter()
+                    .find(|p| p.port == port);
                 if hit.is_some() == present {
                     return hit;
                 }
@@ -1110,7 +1118,10 @@ mod tests {
         let wait_for = |port: u16, present: bool| {
             let deadline = Instant::now() + Duration::from_secs(20);
             loop {
-                let hit = super::list().unwrap().into_iter().find(|p| p.port == port);
+                let hit = super::list(&[])
+                    .unwrap()
+                    .into_iter()
+                    .find(|p| p.port == port);
                 if hit.is_some() == present {
                     return hit;
                 }
@@ -1202,7 +1213,10 @@ mod tests {
         let wait_for = |port: u16, present: bool| {
             let deadline = Instant::now() + Duration::from_secs(20);
             loop {
-                let hit = super::list().unwrap().into_iter().find(|p| p.port == port);
+                let hit = super::list(&[])
+                    .unwrap()
+                    .into_iter()
+                    .find(|p| p.port == port);
                 if hit.is_some() == present {
                     return hit;
                 }

@@ -30,12 +30,13 @@ if (!window.__TAURI__) {
   }
   const P = (port, pid, process, cwd, agent = null, label = process, tech = null) => ({
     port, pid, process, address: "127.0.0.1", system: false, agent, cwd, cmd: label, label, tech,
+    project: cwd.startsWith("~/") && !cwd.startsWith("~/Library/Containers/"),
     dev: (cwd.startsWith("~/") && !cwd.startsWith("~/Library/Containers/")) || ["ollama"].includes(tech),
     launch: cwd.startsWith("~/") ? { key: `${cwd}:${label}`, display: label } : null,
     started_at: Math.floor(Date.now() / 1000) - ((port * 7919) % 300000),
   });
   const now = Date.now() / 1000;
-  const settings = { theme: Q.get("theme") || "dark", glass: !/Windows/i.test(navigator.userAgent), lang: "", show_on_start: true, show_all: false, launch_at_login: false, check_updates: true, version: "0.4.1", protected: ["dir:~/code/illeta-digital"] };
+  const settings = { theme: Q.get("theme") || "dark", glass: !/Windows/i.test(navigator.userAgent), lang: "", show_on_start: true, show_all: false, launch_at_login: false, check_updates: true, project_folders: [], version: "0.4.1", protected: ["dir:~/code/illeta-digital"] };
   let closed = [
     { key: "c1", title: "blog", path: "~/code/blog", display: "npm run dev", items: [{ port: 4321, label: "astro", tech: "astro" }], agent_id: "claude", agent_name: "Claude Code", closed_at: now - 600 },
     { key: "c2", title: "crm", path: "~/code/crm", display: "pnpm dev", items: [{ port: 3001, label: "next", tech: "next" }, { port: 5555, label: "prisma", tech: "node" }], agent_id: null, agent_name: null, closed_at: now - 7200 },
@@ -77,7 +78,7 @@ if (!window.__TAURI__) {
         switch (cmd) {
           case "list_ports": return data.ports;
           case "list_containers": return data.docker;
-          case "get_settings": return { ...settings, protected: [...settings.protected] };
+          case "get_settings": return { ...settings, protected: [...settings.protected], project_folders: [...settings.project_folders] };
           case "set_setting": settings[args.name] = args.value; return;
           case "set_theme": settings.theme = args.value; return;
           case "set_lang": settings.lang = args.value; return;
@@ -86,6 +87,13 @@ if (!window.__TAURI__) {
             settings.protected = settings.protected.includes(k) ? settings.protected.filter((x) => x !== k) : [...settings.protected, k];
             return settings.protected;
           }
+          case "add_project_folder": {
+            const f = String(args.path).trim().replace(/\/+$/, "");
+            if (!f.startsWith("/") && !f.startsWith("~")) throw "Type the full path of a folder, like /srv or ~/work.";
+            if (!settings.project_folders.includes(f)) settings.project_folders = [...settings.project_folders, f];
+            return settings.project_folders;
+          }
+          case "remove_project_folder": settings.project_folders = settings.project_folders.filter((f) => f !== args.path); return settings.project_folders;
           case "list_closed": return closed;
           case "fit_window": if (EMBED) parent.postMessage({ portkeeper: "height", value: args.height, theme: settings.theme }, "*"); return;
           case "check_update": return Q.has("update") ? { version: "0.5.0", notes: "### Added\n- **Forget all** under the Closed list, to clear it in one click.\n- One-command install for macOS, Linux and Windows.\n\n### Security\n- **Start again** runs the saved command as separate arguments, never through a shell.\n- Opening a port only ever opens `http://localhost:<port>`.\n\n---\nDownload the installer for your platform below." } : null;
