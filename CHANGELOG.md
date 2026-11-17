@@ -10,6 +10,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 ## [Unreleased]
 
 ### Added
+- **Close on click outside** in Settings: the widget hides when you click anywhere else, like a menu bar menu. Opening a port, a container's logs or a link keeps it open. Off by default.
 - **Project folders** in Settings: add folders outside your home folder (`/srv`, `/var/www`, an external drive…) and the servers running there show up as projects, grouped by folder.
 
 ### Changed

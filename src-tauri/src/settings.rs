@@ -22,6 +22,8 @@ pub struct Settings {
     /// Extra folders whose processes count as projects, besides the home folder
     /// ("/srv", "/Volumes/Work"…). Stored with the home folder shortened to "~".
     pub project_folders: Vec<String>,
+    /// Close the widget when it loses focus, like a menu bar menu.
+    pub close_on_blur: bool,
 }
 
 impl Default for Settings {
@@ -34,6 +36,7 @@ impl Default for Settings {
             lang: String::new(),
             check_updates: true,
             project_folders: Vec::new(),
+            close_on_blur: false,
         }
     }
 }

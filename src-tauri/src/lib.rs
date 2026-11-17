@@ -36,6 +36,7 @@ struct SettingsDto {
     launch_at_login: bool,
     check_updates: bool,
     project_folders: Vec<String>,
+    close_on_blur: bool,
     version: String,
 }
 
@@ -191,6 +192,7 @@ async fn docker_action(app: AppHandle, id: String, action: String) -> Result<(),
 
 #[tauri::command]
 async fn docker_logs(name: String) -> Result<(), String> {
+    note_opened_other_app();
     docker::open_logs(&name)
 }
 
@@ -199,6 +201,7 @@ fn open_url(url: String) -> Result<(), String> {
     if !is_allowed_url(&url) {
         return Err("only local http://localhost:<port> URLs can be opened".into());
     }
+    note_opened_other_app();
     tauri_plugin_opener::open_url(url, None::<&str>).map_err(|e| e.to_string())
 }
 
@@ -285,6 +288,7 @@ fn get_settings(app: AppHandle) -> SettingsDto {
         launch_at_login: app.autolaunch().is_enabled().unwrap_or(false),
         check_updates: s.check_updates,
         project_folders: s.project_folders,
+        close_on_blur: s.close_on_blur,
         version: app.package_info().version.to_string(),
     }
 }
@@ -302,6 +306,7 @@ fn set_setting(app: AppHandle, name: String, value: bool) -> Result<(), String> 
         "show_on_start" => store.value.show_on_start = value,
         "show_all" => store.value.show_all = value,
         "check_updates" => store.value.check_updates = value,
+        "close_on_blur" => store.value.close_on_blur = value,
         _ => return Err(format!("unknown setting {name}")),
     }
     store.save();
@@ -526,6 +531,28 @@ tauri_nspanel::tauri_panel! {
     })
 }
 
+#[cfg(target_os = "macos")]
+#[allow(clippy::unused_unit)] // panel_event! requires the explicit `-> ()`
+mod panel_events {
+    tauri_nspanel::tauri_panel! {
+        panel_event!(WidgetPanelEvents {
+            window_did_resign_key(notification: &NSNotification) -> ()
+        })
+    }
+
+    /// Run `f` when the widget panel stops being the key window (a click went elsewhere).
+    pub fn on_resign_key(app: &tauri::AppHandle, f: impl Fn() + 'static) {
+        use tauri_nspanel::ManagerExt;
+        let Ok(panel) = app.get_webview_panel("main") else {
+            return;
+        };
+        let events = WidgetPanelEvents::new();
+        events.window_did_resign_key(move |_| f());
+        // The panel keeps the handler alive until it is replaced.
+        panel.set_event_handler(Some(events.as_ref()));
+    }
+}
+
 /// macOS: a non-activating NSPanel. It opens on the desktop you are on (also over
 /// full-screen apps) and stays on that desktop instead of following you around.
 #[cfg(target_os = "macos")]
@@ -542,6 +569,9 @@ fn make_panel(win: &WebviewWindow) -> tauri::Result<()> {
     );
     let _ = panel.add_style_mask(StyleMask::empty().nonactivating_panel().into());
     panel.set_hides_on_deactivate(false);
+    // Close on a click anywhere else, like the system's own menu bar extras.
+    let app = win.app_handle().clone();
+    panel_events::on_resign_key(win.app_handle(), move || auto_hide(&app));
     Ok(())
 }
 
@@ -603,7 +633,9 @@ fn native_show(app: &AppHandle, win: &WebviewWindow) -> bool {
     start.origin.y += if up { -6.0 } else { 6.0 };
     ns.setAlphaValue(0.0);
     ns.setFrame_display(start, false);
-    panel.show();
+    // Key, so that a click elsewhere resigns it and closes the widget ("Close on click
+    // outside"). A non-activating panel only gets windowDidResignKey once it has been key.
+    panel.show_and_make_key();
     unsafe {
         NSAnimationContext::beginGrouping();
         NSAnimationContext::currentContext().setDuration(anim_secs(true));
@@ -825,17 +857,70 @@ fn show(app: &AppHandle, icon: Option<Rect>) {
     {
         use tauri_nspanel::ManagerExt;
         if let Ok(p) = app.get_webview_panel("main") {
-            p.show();
+            p.show_and_make_key();
             return;
         }
     }
     let _ = win.show();
 }
 
+/// When a click outside last closed the widget. A click on the tray icon is outside too,
+/// and its toggle arrives right after: that toggle must not reopen the widget.
+static AUTO_HIDDEN_AT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+/// When the widget itself last opened another app (browser, terminal). The focus loss
+/// that follows is not a click outside, so it must not close the widget: you can open
+/// several ports in a row without reopening it each time.
+static OPENED_OTHER_APP_AT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+/// How long after opening another app a focus loss is still blamed on it.
+const OPENED_OTHER_APP_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+
+fn note_opened_other_app() {
+    *OPENED_OTHER_APP_AT.lock().unwrap() = Some(std::time::Instant::now());
+}
+
+/// `at` happened less than `window` before `now`.
+fn within(
+    at: Option<std::time::Instant>,
+    now: std::time::Instant,
+    window: std::time::Duration,
+) -> bool {
+    at.is_some_and(|t| now.saturating_duration_since(t) < window)
+}
+
+/// The widget lost focus: close it, like a menu bar extra, if the setting is on and the
+/// focus did not go to something the widget just opened.
+fn auto_hide(app: &AppHandle) {
+    let on = app
+        .state::<SettingsState>()
+        .lock()
+        .unwrap()
+        .value
+        .close_on_blur;
+    let now = std::time::Instant::now();
+    if within(
+        *OPENED_OTHER_APP_AT.lock().unwrap(),
+        now,
+        OPENED_OTHER_APP_GRACE,
+    ) {
+        return;
+    }
+    if on && is_visible(app) {
+        *AUTO_HIDDEN_AT.lock().unwrap() = Some(std::time::Instant::now());
+        hide(app);
+    }
+}
+
 fn toggle(app: &AppHandle, icon: Option<Rect>) {
+    let just_closed = within(
+        *AUTO_HIDDEN_AT.lock().unwrap(),
+        std::time::Instant::now(),
+        std::time::Duration::from_millis(300),
+    );
     if is_visible(app) {
         hide(app);
-    } else {
+    } else if !just_closed {
         show(app, icon);
     }
 }
@@ -874,6 +959,13 @@ pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
+    // macOS closes from the panel's resign-key event (make_panel).
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.on_window_event(|win, event| {
+        if let tauri::WindowEvent::Focused(false) = event {
+            auto_hide(win.app_handle());
+        }
+    });
     builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -1003,6 +1095,29 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn opening_another_app_is_not_a_click_outside() {
+        use std::time::{Duration, Instant};
+        let now = Instant::now();
+        let grace = super::OPENED_OTHER_APP_GRACE;
+        // Nothing opened: a focus loss is a click outside.
+        assert!(!super::within(None, now, grace));
+        // A port was just opened in the browser: the focus loss that follows is ignored.
+        assert!(super::within(Some(now), now, grace));
+        assert!(super::within(
+            Some(now),
+            now + Duration::from_millis(400),
+            grace
+        ));
+        // Long after: a real click outside closes the widget again.
+        assert!(!super::within(Some(now), now + grace, grace));
+        assert!(!super::within(
+            Some(now),
+            now + Duration::from_secs(10),
+            grace
+        ));
+    }
+
     #[test]
     fn migrates_old_portero_files_once() {
         let root = std::env::temp_dir().join(format!("pk-migrate-{}", std::process::id()));
