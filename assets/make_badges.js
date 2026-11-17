@@ -29,6 +29,7 @@ const list = [
   ["macos-intel", "macos", "macOS", "Intel · .dmg"],
   ["windows", "windows", "Windows", "10 / 11 · installer .exe"],
   ["linux", "linux", "Linux", "x86_64 · AppImage"],
+  ["linux-arm", "linux", "Linux", "ARM64 · AppImage"],
 ];
 for (const [file, os, title, sub] of list) {
   fs.writeFileSync(path.join(out, `download-${file}.svg`), badge(os, title, sub));

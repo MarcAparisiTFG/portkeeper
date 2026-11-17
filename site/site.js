@@ -41,7 +41,8 @@ window.addEventListener("message", (e) => {
 (function () {
   const REPO = "MarcAparisiTFG/portkeeper";
   const ua = navigator.userAgent;
-  const os = /Windows/i.test(ua) ? "win" : /Mac/i.test(navigator.platform || ua) ? "mac" : /Linux/i.test(ua) ? "linux" : null;
+  const os = /Windows/i.test(ua) ? "win" : /Mac/i.test(navigator.platform || ua) ? "mac"
+    : /Linux/i.test(ua) ? (/aarch64|arm64|armv8/i.test(ua + " " + (navigator.platform || "")) ? "linux-arm" : "linux") : null;
   const here = os && document.getElementById(os);
   if (here) here.classList.add("here");
 

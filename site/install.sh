@@ -89,12 +89,18 @@ main() {
       fi
       ;;
     Linux)
-      [ "$(uname -m)" = "x86_64" ] || { echo "Only x86_64 Linux builds exist for now: $REPO/releases"; exit 1; }
+      # Tauri names the AppImage after the Debian architecture: amd64, aarch64.
+      case "$(uname -m)" in
+        x86_64 | amd64) ARCH=x86_64; ASSET=amd64 ;;
+        aarch64 | arm64) ARCH=aarch64; ASSET=aarch64 ;;
+        *) echo "Only x86_64 and aarch64 Linux builds exist for now: $REPO/releases"; exit 1 ;;
+      esac
       BIN="$HOME/.local/bin"; APPS="$HOME/.local/share/applications"
       mkdir -p "$BIN" "$APPS"
-      echo "Downloading Portkeeper $VER for Linux (x86_64)…"
-      fetch "$REPO/releases/download/$TAG/Portkeeper_${VER}_amd64.AppImage" "$TMP/portkeeper"
-      fetch "$REPO/releases/download/$TAG/Portkeeper_${VER}_amd64.AppImage.sig" "$TMP/portkeeper.sig"
+      echo "Downloading Portkeeper $VER for Linux ($ARCH)…"
+      fetch "$REPO/releases/download/$TAG/Portkeeper_${VER}_${ASSET}.AppImage" "$TMP/portkeeper" \
+        || { echo "Portkeeper $VER has no Linux $ARCH build: $REPO/releases"; exit 1; }
+      fetch "$REPO/releases/download/$TAG/Portkeeper_${VER}_${ASSET}.AppImage.sig" "$TMP/portkeeper.sig"
       verify "$TMP/portkeeper" "$TMP/portkeeper.sig"
       chmod +x "$TMP/portkeeper"
       pkill -f "$BIN/portkeeper" 2>/dev/null || true

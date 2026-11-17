@@ -12,6 +12,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 ### Added
 - **Close on click outside** in Settings: the widget hides when you click anywhere else, like a menu bar menu. Opening a port, a container's logs or a link keeps it open. Off by default.
 - **Project folders** in Settings: add folders outside your home folder (`/srv`, `/var/www`, an external drive…) and the servers running there show up as projects, grouped by folder.
+- **Linux on ARM64** (Raspberry Pi 5, Snapdragon laptops, Linux VMs on Apple Silicon): a native AppImage, also through the one-command install.
 
 ### Changed
 - Servers started with `cargo run` or `go run` get the Rust or Go icon instead of a plain tile.

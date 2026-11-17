@@ -69,6 +69,7 @@ h1 { font-size: clamp(28px, 5vw, 40px); font-weight: 600; letter-spacing: -.03em
 
 .card { margin: 36px auto 0; max-width: 520px; }
 .dl { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.dl .btn:last-child:nth-child(odd) { grid-column: 1 / -1; }
 .btn { display: flex; align-items: center; gap: 14px; padding: 14px 18px; border-radius: 12px; text-align: left;
   border: 1px solid var(--line); background: var(--bg); transition: border-color .15s, box-shadow .15s; }
 .btn:hover { border-color: var(--strong); box-shadow: 0 6px 16px rgba(0, 0, 0, .06); }

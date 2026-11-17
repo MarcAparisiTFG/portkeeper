@@ -33,7 +33,7 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: sh .github/release-notes.sh "$TAG"
 
-  # One draft release for all four builds to upload into. A draft is invisible to the app,
+  # One draft release for all five builds to upload into. A draft is invisible to the app,
   # the website and releases/latest, so nobody is offered a half-uploaded release.
   draft:
     needs: test
@@ -90,6 +90,10 @@ jobs:
             args: --target x86_64-apple-darwin
           - platform: ubuntu-22.04
             args: ""
+          # Native ARM runner: the AppImage tooling cannot cross-compile. 22.04 keeps the
+          # glibc floor as low as the x86_64 build.
+          - platform: ubuntu-22.04-arm
+            args: ""
           - platform: windows-latest
             args: ""
     runs-on: ${{ matrix.platform }}
@@ -135,7 +139,7 @@ jobs:
 
   # Copies of the main installers with version-free names, so
   # releases/latest/download/<name> always points at the newest build (README, website),
-  # then publish. Only runs if all four builds succeeded.
+  # then publish. Only runs if all five builds succeeded.
   publish:
     needs: build
     runs-on: ubuntu-latest
@@ -149,11 +153,13 @@ jobs:
         run: |
           mkdir dl && cd dl
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
-            -p '*_aarch64.dmg' -p '*_x64.dmg' -p '*_x64-setup.exe' -p '*_amd64.AppImage'
+            -p '*_aarch64.dmg' -p '*_x64.dmg' -p '*_x64-setup.exe' -p '*_amd64.AppImage' \
+            -p '*_aarch64.AppImage'
           mv *_aarch64.dmg Portkeeper-macOS-AppleSilicon.dmg
           mv *_x64.dmg Portkeeper-macOS-Intel.dmg
           mv *_x64-setup.exe Portkeeper-Windows-x64-setup.exe
           mv *_amd64.AppImage Portkeeper-Linux-x86_64.AppImage
+          mv *_aarch64.AppImage Portkeeper-Linux-aarch64.AppImage
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber Portkeeper-*
       - name: Publish
         run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
