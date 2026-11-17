@@ -9,6 +9,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-17
+
 ### Added
 - **Close on click outside** in Settings: the widget hides when you click anywhere else, like a menu bar menu. Opening a port, a container's logs or a link keeps it open. Off by default.
 - **Project folders** in Settings: add folders outside your home folder (`/srv`, `/var/www`, an external drive…) and the servers running there show up as projects, grouped by folder.
@@ -69,7 +71,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 ### Added
 - First public release: every listening port and Docker container, grouped by project, with the logo of the agent or IDE that started it. Open, stop or kill with one click. Closed tab to start projects again. Project locks. Five languages.
 
-[Unreleased]: https://github.com/MarcAparisiTFG/portkeeper/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/MarcAparisiTFG/portkeeper/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/MarcAparisiTFG/portkeeper/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/MarcAparisiTFG/portkeeper/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/MarcAparisiTFG/portkeeper/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/MarcAparisiTFG/portkeeper/compare/v0.3.0...v0.4.0
